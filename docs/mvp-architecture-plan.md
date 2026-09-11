@@ -95,7 +95,7 @@ flowchart LR
 
 所有核心數量以 **base token** 表示，運算使用 decimal library，禁止 JavaScript `number`。
 
-- `spotFilledSignedQty`：Spot buy 為正、sell 為負；採交易所可證實的累計 base fill。
+- `spotFilledSignedQty`：Spot buy 為正、sell 為負；採交易所可證實的**成交毛量（gross base fill）**。
 - `spotFilledNetQty`：已去重後，納入策略範圍的 `spotFilledSignedQty` 加總。
 - `hedgeTargetSignedQty = -spotFilledNetQty * hedgeRatio`：Futures 目標；負值代表 sell、正值代表 buy。
 - `futuresHedgedSignedQty`：只由已確認 Futures fills 加總，不由 ACK 加總。
@@ -107,7 +107,7 @@ flowchart LR
 ### 每筆事件的處理交易
 
 1. 驗證 schema、symbol、product type 與 order ownership；資料不全則隔離並觸發對帳。
-2. 判別人工 Spot 訂單。自有單必須有受控 `clientOid` 前綴；但「沒有前綴」只代表候選人工單，仍須核對 symbol／來源範圍。Futures order event 永不當成 Spot 觸發源。
+2. 判別人工 Spot 訂單。MVP 採「專用 subaccount」策略：只監聽指定子帳戶中的人工 Spot 訂單，再搭配 symbol 檢核。Futures order event 永不當成 Spot 觸發源。
 3. 以 `tradeId` 去重；若只有累計成交量，則針對同一 order 串行處理並計算 `max(exchangeCumFilled - processedCumFilled, 0)`。累計量倒退或同版本內容衝突時轉 `RECOVERY`。
 4. 先以原子化保存 raw event、正規化 fill、累計量與 hedge intent；確認只有在保存成功後才允許 worker 送單。具體儲存模型不在本次範圍。
 5. coordinator 串行化同一策略的意圖，先扣除「已成交」與「仍在工作中的未成交 hedge qty」，避免上一張尚未 fill 時又送同一 delta。
@@ -160,7 +160,7 @@ stateDiagram-v2
 
 ### pause 與 kill 的精確語意
 
-- `pauseNewEntries=true`：不納入**新的人工 Spot order** 作為正常入口，但仍須記錄所有 fill、完成既有 hedge、對帳及告警。若人工在 paused 時仍成交，不能默默丟棄；標記為 `manual_intervention_required` 並計入曝險視圖。恢復時由授權者決定是否納入，避免意外補下歷史部位。
+- `pauseNewEntries=true`：不納入**新的人工 Spot order** 作為正常入口，但仍須記錄所有 fill、完成既有 hedge、對帳及告警。若人工在 paused 時仍成交，MVP 規則為「記錄並告警，但恢復後預設忽略，不自動補 hedge」。
 - `killSwitch=true`：禁止所有新 Futures place／replace；既有訂單是否自動 cancel 屬另一項風控決策，MVP 預設不自動 cancel，只告警並由人工處理。事件照常持久化，曝險照常計算。
 - 狀態優先序：`KILL_SWITCH > PROTECTED/RECOVERY > PAUSED > RUNNING`。
 
@@ -172,9 +172,12 @@ stateDiagram-v2
 | `futuresSymbol` | `STRCUSDT` | 驗證 USDT perpetual、合約乘數、可交易、one-way 相容 | restart-only |
 | `hedgeClientOidPrefix` | `HEDGE_` | 加上環境、策略、intent ID；符合官方長度／字元限制 | restart-only |
 | `hedgeRatio` | `1.0` | `>0`；經濟關係未證實前不得實盤 | 受保護、版本化 |
+| `hedgeFillBasis` | `gross_base_fill` | 以 Spot 成交毛量作為對沖計算基準；費用改走獨立 PnL 欄位 | 固定（MVP） |
+| `futuresOrderFallbackMode` | `market_only` | Futures 對沖只用市價；若市價不可用則告警並人工處理，不自動改 IOC | 固定（MVP） |
 | `maxHedgeDelayMs` | `3000` | 起點採 Spot fill 的交易所時間與本地接收時間中較保守者；終點為 Futures **fill**，不是 ACK | 受保護 |
 | `hedgeToleranceQty` | **待校準** | 不得小於 Futures qty step；需同時受名目上限約束 | 實盤阻擋 |
-| `maxUnhedgedNotionalUsdt` | **待校準** | 用保守可執行價：需買用 ask、需賣用 bid，另加壓力 buffer | 實盤阻擋 |
+| `maxUnhedgedNotionalUsdt` | **待校準** | 用保守可執行價：需買用 ask、需賣用 bid，並加壓力 buffer | 實盤阻擋 |
+| `unhedgedNotionalBufferPct` | `0.5` | 未對沖名目換算壓力 buffer（%） | 受保護 |
 | `maxRecoveryAttempts` | `3` | 每個 recovery episode；查詢不明不可盲目重送 | 受保護 |
 | `recoveryTimeoutMs` | `10000` | 超時進 `PROTECTED`，不自動假設訂單失敗 | 受保護 |
 | `pauseNewEntries` | `false` | 語意見上節；所有變更寫 audit log | 私有管理通道 |
@@ -188,6 +191,7 @@ stateDiagram-v2
 - Futures hedge qty 一律朝零 `floor_to_step`，不得為達 minimum 而向上製造反向曝險。
 - 剩餘 dust 留在 residual；若其保守名目超過上限，轉 `PROTECTED`，不可用不合規數量硬送。
 - 檢查餘額、Futures 可用保證金、持倉／風險限額、當前交易時段及 API rate limit。
+- Futures 市價不可用或被交易所拒絕時，MVP 不自動改為 IOC/限價，直接告警並轉人工處理。
 - 商品 metadata 設 TTL 並定期刷新；發現規格變更時暫停送單、重新量化並告警。
 
 ## 6. REST／WebSocket 功能對照（MVP 最小集合）
@@ -244,7 +248,7 @@ stateDiagram-v2
 | Futures rejected | 記錄 code/message，刷新 metadata/balance；僅可判定為可修復者重試 | qty、margin、market closed 等持續失敗 |
 | 持久狀態不可用／失去 leader | fail closed，停止送單；以 fencing token 阻止舊 leader 繼續工作 | 一律進 recovery |
 | 時鐘漂移 | NTP 監控、簽章時間錯誤時停止私有操作 | 漂移超限 |
-| kill switch | 下單 adapter 最內層再次檢查，拒絕 place/replace | 一直維持至雙人或明確授權解除 |
+| kill switch | 下單 adapter 最內層再次檢查，拒絕 place/replace | 單人模式下維持至本人明確解除；如日後多人協作再啟用雙人覆核 |
 
 ### 啟動／重啟 runbook
 
@@ -263,20 +267,28 @@ stateDiagram-v2
 - WS stale／sequence gap、REST 429、order uncertain、position mismatch、leader churn、持久狀態失效、instrument/session 變更。
 - 告警內容只含 order/client reference、數量與錯誤碼；API secret、passphrase、簽章、完整 header 絕不寫入。
 
+### 通知通道（Telegram / TG）
+
+- MVP 通知通道使用 Telegram（TG）Bot。
+- 至少推送以下事件：對沖逾時、未對沖名目超限、私有 WS 斷線/重連失敗、`killSwitch` 啟用、`PROTECTED` 狀態進入。
+- TG 訊息最小欄位：`time`、`symbol`、`eventType`、`impactNotionalUsdt`、`deltaQty`、`suggestedAction`。
+- 通知失敗不得中斷交易狀態機，但需在本地記錄為可追蹤錯誤並重試。
+
 ## 9. 公開 UI 與管理面安全
 
 ### 公開唯讀面
 
 - `GET /api/public/market`：Spot/Futures bid、ask、spread、exchange/local timestamp、stale flag。
-- `GET /api/public/status`：`running/paused/kill-switch/recovery/protected`、是否可交易、最後對帳時間、保護原因。
+- `GET /api/public/status`：`running/paused/kill-switch/recovery/protected`、是否可交易、最後對帳時間、保護原因、是否開盤中（`isMarketOpenNow`）。
+- `GET /api/public/session`：當前交易階段（`pre_market` / `regular` / `after_hours` / `overnight`）、交易所時區、台北時間對照、資料時間戳。
 - `GET /api/public/events`：經過遮罩及限量的成交／對沖結果、`deltaQty`、未對沖名目；不得暴露 account ID、完整 order/clientOid 或原始 payload。
 - UI 明示資料延遲與「唯讀，不提供下單」。所有 public endpoints rate limit、CSP、安全 header 與 cache policy 明確化。
 
 ### 管理面
 
-首選將管理端點置於 Zero Trust access proxy／私有網路或獨立的 Koyeb private exposure；若平台無法保證網路層不可達，MVP 可先**不提供遠端管理 route**，改以受控維運程序設定 kill，直到完成強身份驗證。僅「URL 難猜」或共用 bearer token 不合格。
+管理面決策如下：若 Koyeb 無法保證私有 ingress，MVP **不提供遠端管理寫入 route**，只保留公開唯讀 UI；`pause/kill/config` 由受控維運流程在內部執行。僅「URL 難猜」或共用 bearer token 不合格。
 
-若啟用管理 route，至少要求：拒絕公開 ingress、OIDC/MFA、短時 token、RBAC、CSRF 防護、request replay 防護、IP／Zero Trust policy、每次操作 reason 與 append-only audit。`kill` 可單人啟用；`unkill`、提高曝險上限、變更 symbol／ratio 建議雙人覆核。管理 route 只寫 command/config，不直接呼叫 place order。
+目前為單人使用，MVP 先不做 RBAC 與雙人覆核；若未來開啟遠端管理 route，至少要有短時管理 token、IP/Zero Trust allowlist、CSRF 與 replay 防護、每次操作 reason + append-only audit。管理 route 只寫 command/config，不直接呼叫 place order。
 
 Secrets 只由 Koyeb Secret 注入 server runtime；禁止使用 `PUBLIC_` 類前端 build-time 變數。CI 不持有交易 secret，瀏覽器 bundle、source map、錯誤追蹤及 log formatter 都必須有 secret scanning／redaction 測試。
 
@@ -301,6 +313,7 @@ Secrets 只由 Koyeb Secret 注入 server runtime；禁止使用 `PUBLIC_` 類�
 | 整合 | 兩 replica 同時成 leader | fencing 後只有一個可送單 |
 | 對帳 | 本地推導 fill 與實際 position 不符 | 禁止 running，不自動猜測補單，告警人工判讀 |
 | 安全 | public route fuzz／method swap | 無任何交易或 config mutation 路徑 |
+| 介面 | market session 切換（pre/regular/after/overnight） | UI 在可接受延遲內正確顯示 `isMarketOpenNow` 與當前交易階段 |
 | 安全 | bundle/log/CI artifact secret scan | 不含 key、secret、passphrase、簽章 |
 | 驗收 | Spot partial fill 到 Futures fill | 在設定延遲內，殘差及名目均在閾值內 |
 
@@ -312,7 +325,7 @@ Secrets 只由 Koyeb Secret 注入 server runtime；禁止使用 `PUBLIC_` 類�
 
 - 逐頁保存開工日、文件版本／頁面 hash、REST/WS request-response fixture。
 - 以公開 API 驗證兩商品規格、狀態、精度、最小量及行情；由人工帳戶驗證交易資格與 one-way mode。
-- 定案 `hedgeToleranceQty`、`maxUnhedgedNotionalUsdt`、費用處理及 1:1 經濟假設。
+- 校準 `hedgeToleranceQty`、`maxUnhedgedNotionalUsdt`，並驗證 1:1 經濟假設（費用處理已定案為 gross fill 對沖、費用獨立入帳）。
 - **Gate**：第 0 節七項阻擋問題任一未解即 No-Go。
 
 ### Phase 1：唯讀垂直接線
@@ -339,14 +352,14 @@ Secrets 只由 Koyeb Secret 注入 server runtime；禁止使用 `PUBLIC_` 類�
 - protected main 需 review 才可合併；Koyeb 自 main 建置 immutable image，部署後先 recovery/read-only health，再由明確 promotion gate 啟用 trader。
 - 部署失敗或新版本無法對帳時回滾程式，但**不可回滾資料／交易事實**；回滾版本也必須先 recovery。
 
-## 12. 開工前決策清單
+## 12. 開工前決策結果（已定案）
 
-1. 手續費應以 gross base fill 還是 net received base qty 作 hedge，兩者如何由 WS／REST 欄位可靠推導？
-2. Futures market order 的最大滑價／價格保護是否可設定；若 market 不可用時是否允許 IOC limit（MVP 預設不自行替換語意）？
-3. Spot 人工單如何可靠辨識：專用 subaccount/API actor、clientOid 規則，或人工訂單 allowlist？只靠排除 `HEDGE_` 不足以區分其他程式單。
-4. paused 期間的人工 fill 在 resume 時是忽略、人工批准後補 hedge，還是視為事故？本規劃預設人工批准。
-5. kill 時既有未成交 Futures hedge 是否保留或取消？本規劃預設保留並告警。
-6. 未對沖名目採哪個保守價格與壓力 buffer？閾值需由可承受損失與最小交易量反推，不能任意填值。
-7. Koyeb 方案是否提供所需私有 ingress／固定出口 IP、WebSocket 長連線與 graceful shutdown 時間？若否，管理面及 API allowlist 需另行設計。
+1. **對沖數量口徑**：採 `gross base fill`（Spot 成交毛量）計算 hedge；手續費走獨立 PnL 欄位。
+2. **Futures 對沖下單語意**：採 `market_only`；若市價不可用，直接告警並人工處理，不自動改 IOC/限價。
+3. **人工 Spot 單辨識**：採「專用 subaccount」監聽策略，只處理該帳戶下指定 symbol 的 Spot fill。
+4. **paused 期間成交處理**：記錄並告警，但恢復後預設忽略，不自動補 hedge。
+5. **kill 期間既有未成交對沖單**：保留並告警，由人工決策是否撤單。
+6. **未對沖名目估值**：採保守可執行價（買看 ask、賣看 bid）並加 `0.5%` 壓力 buffer。
+7. **管理面部署策略**：若 Koyeb 無法保證私有 ingress，MVP 不提供遠端管理寫入 route，只保留公開唯讀 UI。
 
-以上問題完成書面核准前，系統最多只能運行在 dry-run／唯讀模式。
+仍需在開工時校準：`hedgeToleranceQty`、`maxUnhedgedNotionalUsdt`、`spotNotionalBufferPct`。完成校準前，系統最多運行於 dry-run／唯讀模式。
