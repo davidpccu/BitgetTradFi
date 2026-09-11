@@ -1,0 +1,16 @@
+{
+  "name": "bitget-strc-dry-run",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bitget STRC/rSTRC Phase 1 read-only dry-run observer",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "check": "find src scripts support test -name '*.js' -print0 | xargs -0 -n1 node --check && node scripts/check-boundaries.js",
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage"
+  }
+}

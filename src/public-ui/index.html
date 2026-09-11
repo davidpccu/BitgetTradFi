@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>STRC Hedge Observer</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div><p class="eyebrow">BITGET · PHASE 1</p><h1>STRC Hedge Observer</h1></div>
+      <div class="badges"><span class="badge danger">DRY-RUN · 永不送單</span><span id="mode" class="badge">LOADING</span></div>
+    </header>
+    <section class="notice">公開唯讀監看介面。所有對沖均為模擬意圖，這裡沒有下單、停用或參數修改功能。</section>
+    <section class="grid market">
+      <article><p>RSTRC / USDT · SPOT</p><div><span>Bid</span><strong id="spot-bid">—</strong></div><div><span>Ask</span><strong id="spot-ask">—</strong></div></article>
+      <article><p>STRC / USDT · PERPETUAL</p><div><span>Bid</span><strong id="futures-bid">—</strong></div><div><span>Ask</span><strong id="futures-ask">—</strong></div></article>
+      <article><p>MARKET</p><div><span>Spread</span><strong id="spread">—</strong></div><div><span>Session</span><strong id="session">UNKNOWN</strong></div></article>
+    </section>
+    <section class="grid state">
+      <article><span>Gross Spot Net</span><strong id="spot-net">0</strong></article>
+      <article><span>Delta Qty</span><strong id="delta">0</strong></article>
+      <article><span>Unhedged Notional</span><strong id="notional">—</strong></article>
+      <article><span>Protection</span><strong id="protection">ON</strong></article>
+    </section>
+    <section class="panel"><div class="panel-title"><h2>最近事件</h2><span id="updated">尚無行情</span></div><div id="events" class="events"><p class="empty">等待 private FILL 事件…</p></div></section>
+    <footer><span id="connections">PUBLIC WS — · PRIVATE WS —</span><span id="reason">啟動中</span></footer>
+  </main>
+  <script type="module" src="/assets/app.js"></script>
+</body>
+</html>
