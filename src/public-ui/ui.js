@@ -1,0 +1,4 @@
+const safe = value => String(value ?? '—').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const render = (id, data) => document.getElementById(id).innerHTML = Object.entries(data).map(([key,value]) => `<dt>${safe(key)}</dt><dd>${safe(typeof value === 'object' ? JSON.stringify(value) : value)}</dd>`).join('');
+async function refresh(){try{const [status,session,market]=await Promise.all(['status','session','market'].map(x=>fetch(`/api/public/${x}`).then(r=>r.json())));render('status',status);render('session',session);render('market',market);document.getElementById('freshness').textContent=`本地更新：${new Date().toLocaleString('zh-TW',{timeZone:'Asia/Taipei'})}（Asia/Taipei）`;}catch{document.getElementById('freshness').textContent='資料暫時無法取得';}}
+refresh();setInterval(refresh,5000);

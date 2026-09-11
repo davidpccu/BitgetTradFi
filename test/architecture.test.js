@@ -1,0 +1,4 @@
+import test from 'node:test'; import assert from 'node:assert/strict'; import { readFile, readdir } from 'node:fs/promises';
+async function files(directory){const result=[];for(const entry of await readdir(directory,{withFileTypes:true})){const path=`${directory}/${entry.name}`;if(entry.isDirectory())result.push(...await files(path));else result.push(path);}return result;}
+test('public-ui only depends on read model and platform modules',async()=>{for(const path of (await files('src/public-ui')).filter(x=>/\.(js|html)$/.test(x))){const source=await readFile(path,'utf8');assert.doesNotMatch(source,/exchange-adapter|domain\/coordinator|workers\/private/,`${path} crosses public boundary`);}});
+test('no live place order implementation or public mutation route',async()=>{let combined='';for(const path of (await files('src')).filter(x=>x.endsWith('.js'))) combined+=await readFile(path,'utf8');assert.doesNotMatch(combined,/placeOrder\s*\(|\/api\/(admin|trade)/);});
