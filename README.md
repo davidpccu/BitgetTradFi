@@ -22,7 +22,7 @@ npm test
 npm start
 ```
 
-瀏覽 `http://localhost:3000`。可設定 `PORT`、`STATE_FILE`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`；交易所 secret 不應出現在前端環境變數。啟動時 recovery skeleton 會刻意保持 `PROTECTED`，直到後續接上經 Phase 0 驗證的 authenticated REST/WS contract。
+瀏覽 `http://localhost:3000`。可設定 `PORT`、`STATE_FILE`、`TELEGRAM_BOT_TOKEN`、`TELEGRAM_CHAT_ID`；交易所 secret 不應出現在前端環境變數。`FUTURES_QTY_STEP` 與 `FUTURES_MIN_QTY` 針對預設 `STRCUSDT` 的保守 fallback 均為 `0.01`；若 instrument metadata 顯示不同值，必須同時覆寫兩者，實盤仍必須以下單前動態驗證結果為準。啟動時 recovery skeleton 會刻意保持 `PROTECTED`，直到後續接上經 Phase 0 驗證的 authenticated REST/WS contract。
 
 ## 公開 API
 
